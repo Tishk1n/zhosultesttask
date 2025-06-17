@@ -1,8 +1,10 @@
 """AMQP consumer implementation."""
 import json
+import asyncio
 from typing import Dict, Any
-import pika
-from pika.exceptions import AMQPConnectionError
+import aio_pika
+from aio_pika.abc import AbstractIncomingMessage
+from aio_pika.exceptions import AMQPConnectionError
 
 from app.logger import logger
 from app.metrics import AMQP_RECONNECTS
@@ -10,124 +12,107 @@ from app.config import config
 from app.callback import CallbackSender
 
 class Consumer:
-    """AMQP consumer for callback service."""
+    """Asynchronous AMQP consumer for callback service."""
     
     def __init__(self):
         """Initialize consumer."""
         self.connection = None
         self.channel = None
         self._closing = False
-        self.callback_sender = CallbackSender()
+        self.callback_sender = None
     
-    def connect(self) -> pika.SelectConnection:
+    async def connect(self) -> aio_pika.Connection:
         """Connect to AMQP server.
         
         Returns:
-            pika.SelectConnection: Connection instance
+            aio_pika.Connection: Connection instance
         """
         try:
-            return pika.BlockingConnection(
-                pika.URLParameters(config.amqp_url)
-            )
+            return await aio_pika.connect_robust(config.amqp_url)
         except AMQPConnectionError:
             AMQP_RECONNECTS.inc()
             logger.error("Connection to AMQP failed, retrying...")
             raise
     
-    def setup_channel(self):
+    async def setup_channel(self):
         """Set up AMQP channel and declare queue."""
-        self.channel = self.connection.channel()
+        self.channel = await self.connection.channel()
         
         # Declare queue
-        self.channel.queue_declare(
-            queue=config.queue,
+        await self.channel.declare_queue(
+            name=config.queue,
             durable=True,
             auto_delete=False
         )
         
         # Set QoS
-        self.channel.basic_qos(prefetch_count=1)
+        await self.channel.set_qos(prefetch_count=1)
     
-    def process_message(
-        self,
-        channel: pika.channel.Channel,
-        method_frame: pika.spec.Basic.Deliver,
-        _header_frame: pika.spec.BasicProperties,
-        body: bytes
-    ):
+    async def process_message(self, message: AbstractIncomingMessage):
         """Process AMQP message.
         
         Args:
-            channel (pika.channel.Channel): AMQP channel
-            method_frame (pika.spec.Basic.Deliver): Delivery frame
-            _header_frame (pika.spec.BasicProperties): Message properties
-            body (bytes): Message body
+            message (AbstractIncomingMessage): Incoming message
         """
-        try:
-            # Parse message
-            message = json.loads(body)
-            
-            # Validate message
-            required_fields = {'target_url', 'hmac_secret', 'payload'}
-            if not all(field in message for field in required_fields):
-                raise ValueError("Missing required fields in message")
-            
-            # Send callback
-            success = self.callback_sender.send_callback(
-                target_url=message['target_url'],
-                payload=message['payload'],
-                hmac_secret=message['hmac_secret'],
-                method=message.get('target_method')
-            )
-            
-            if success:
-                channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-            else:
-                channel.basic_nack(
-                    delivery_tag=method_frame.delivery_tag,
-                    requeue=True
+        async with message.process():
+            try:
+                # Parse message
+                body = json.loads(message.body.decode())
+                
+                # Validate message
+                required_fields = {'target_url', 'hmac_secret', 'payload'}
+                if not all(field in body for field in required_fields):
+                    raise ValueError("Missing required fields in message")
+                
+                # Send callback
+                success = await self.callback_sender.send_callback(
+                    target_url=body['target_url'],
+                    payload=body['payload'],
+                    hmac_secret=body['hmac_secret'],
+                    method=body.get('target_method')
                 )
                 
-        except Exception as e:
-            logger.error(f"Error processing message: {e}")
-            # Requeue message on error
-            channel.basic_nack(
-                delivery_tag=method_frame.delivery_tag,
-                requeue=True
-            )
+                if not success:
+                    # Requeue message on failure
+                    await message.nack(requeue=True)
+                    
+            except Exception as e:
+                logger.error(f"Error processing message: {e}")
+                # Requeue message on error
+                await message.nack(requeue=True)
     
-    def start_consuming(self):
+    async def start_consuming(self):
         """Start consuming messages."""
         try:
-            self.connection = self.connect()
-            self.setup_channel()
+            self.connection = await self.connect()
+            await self.setup_channel()
             
-            self.channel.basic_consume(
-                queue=config.queue,
-                on_message_callback=self.process_message
-            )
+            queue = await self.channel.get_queue(config.queue)
+            self.callback_sender = CallbackSender()
             
-            logger.info(
-                "Started consuming",
-                extra={'queue': config.queue}
-            )
-            
-            try:
-                self.channel.start_consuming()
-            except KeyboardInterrupt:
-                self.channel.stop_consuming()
+            async with self.callback_sender:
+                logger.info(
+                    "Started consuming",
+                    extra={'queue': config.queue}
+                )
+                
+                async with queue.iterator() as queue_iter:
+                    async for message in queue_iter:
+                        if self._closing:
+                            break
+                        await self.process_message(message)
                 
         except Exception as e:
             logger.error(f"Consumer error: {e}")
             if self.connection and not self.connection.is_closed:
-                self.connection.close()
+                await self.connection.close()
             raise
     
-    def run(self):
+    async def run(self):
         """Run consumer with automatic reconnection."""
         while not self._closing:
             try:
-                self.start_consuming()
+                await self.start_consuming()
             except AMQPConnectionError:
                 continue
             except KeyboardInterrupt:
@@ -136,4 +121,4 @@ class Consumer:
                     self.connection and
                     not self.connection.is_closed
                 ):
-                    self.connection.close()
+                    await self.connection.close()

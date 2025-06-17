@@ -1,6 +1,7 @@
 """CLI implementation."""
 import argparse
 import sys
+import asyncio
 from typing import List
 
 from app.logger import logger
@@ -21,13 +22,13 @@ def parse_args(args: List[str]) -> argparse.Namespace:
         description='Callback microservice for AMQP messages'
     )
     
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
         '--metrics',
         action='store_true',
         help='Start metrics HTTP server'
     )
-    
-    parser.add_argument(
+    group.add_argument(
         '--consumer',
         action='store_true',
         help='Start AMQP consumer'
@@ -35,8 +36,8 @@ def parse_args(args: List[str]) -> argparse.Namespace:
     
     return parser.parse_args(args)
 
-def main(args: List[str] = None):
-    """Main entry point.
+async def amain(args: List[str] = None):
+    """Async main entry point.
     
     Args:
         args (List[str], optional): Command line arguments.
@@ -64,12 +65,19 @@ def main(args: List[str] = None):
         if parsed_args.consumer:
             logger.info("Starting consumer")
             consumer = Consumer()
-            consumer.run()
+            await consumer.run()
             
-        if not (parsed_args.metrics or parsed_args.consumer):
-            logger.error("No action specified. Use --help for usage info.")
-            sys.exit(1)
+        # No need to check for missing arguments as they are required by argparse
             
     except Exception as e:
         logger.error(f"Application error: {e}")
         sys.exit(1)
+
+def main(args: List[str] = None):
+    """Main entry point that runs the async main function.
+    
+    Args:
+        args (List[str], optional): Command line arguments.
+            Defaults to sys.argv[1:].
+    """
+    asyncio.run(amain(args))
