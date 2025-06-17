@@ -1,83 +1,97 @@
 """CLI implementation."""
 import argparse
-import sys
 import asyncio
-from typing import List
+import sys
+from typing import Optional, Sequence
 
-from app.logger import logger
-from app.metrics import start_metrics_server
 from app.config import config
 from app.consumer import Consumer
+from app.logger import logger
+from app.metrics import start_metrics_server
 
-def parse_args(args: List[str]) -> argparse.Namespace:
+
+def parse_args(args: Optional[Sequence[str]] = None) -> argparse.Namespace:
     """Parse command line arguments.
-    
+
     Args:
-        args (List[str]): Command line arguments
-        
+        args (Optional[Sequence[str]]): Command line arguments
+
     Returns:
         argparse.Namespace: Parsed arguments
     """
     parser = argparse.ArgumentParser(
-        description='Callback microservice for AMQP messages'
+        description="Callback microservice for AMQP messages"
     )
-    
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        '--metrics',
-        action='store_true',
-        help='Start metrics HTTP server'
-    )
-    group.add_argument(
-        '--consumer',
-        action='store_true',
-        help='Start AMQP consumer'
-    )
-    
-    return parser.parse_args(args)
 
-async def amain(args: List[str] = None):
+    parser.add_argument(
+        "--metrics",
+        action="store_true",
+        help="Start metrics HTTP server"
+    )
+    parser.add_argument(
+        "--consumer",
+        action="store_true",
+        help="Start AMQP consumer"
+    )
+    parser.add_argument(
+        "--metrics-port",
+        type=int,
+        default=8000,
+        help="Port for metrics server"
+    )
+
+    return parser.parse_args(args if args is not None else [])
+
+
+async def amain(args: Optional[Sequence[str]] = None) -> None:
     """Async main entry point.
-    
+
     Args:
-        args (List[str], optional): Command line arguments.
+        args (Optional[Sequence[str]], optional): Command line arguments.
             Defaults to sys.argv[1:].
     """
-    if args is None:
-        args = sys.argv[1:]
-    
+    parser = argparse.ArgumentParser(
+        description="Callback microservice for AMQP messages"
+    )
     parsed_args = parse_args(args)
-    
+
     try:
+        # Start metrics server if requested
         if parsed_args.metrics:
+            metrics_port = parsed_args.metrics_port
             logger.info(
                 "Starting metrics server",
                 extra={
-                    'host': config.metrics_host,
-                    'port': config.metrics_port
+                    "host": config.metrics_host,
+                    "port": metrics_port
                 }
             )
             start_metrics_server(
                 host=config.metrics_host,
-                port=config.metrics_port
+                port=metrics_port
             )
-        
+
+        # Start consumer if requested
         if parsed_args.consumer:
             logger.info("Starting consumer")
             consumer = Consumer()
             await consumer.run()
-            
-        # No need to check for missing arguments as they are required by argparse
-            
+
+        # If neither service was requested, show help
+        if not (parsed_args.metrics or parsed_args.consumer):
+            parser.print_help()
+            sys.exit(1)
+
     except Exception as e:
-        logger.error(f"Application error: {e}")
+        logger.error("Application error", extra={"error": str(e)})
         sys.exit(1)
 
-def main(args: List[str] = None):
+
+def main(args: Optional[Sequence[str]] = None) -> None:
     """Main entry point that runs the async main function.
-    
+
     Args:
-        args (List[str], optional): Command line arguments.
+        args (Optional[Sequence[str]], optional): Command line arguments.
             Defaults to sys.argv[1:].
     """
-    asyncio.run(amain(args))
+    asyncio.run(amain(args if args is not None else []))

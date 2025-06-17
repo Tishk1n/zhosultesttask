@@ -7,15 +7,47 @@
 - Прием сообщений из AMQP очереди
 - Автоматическая подпись запросов через HMAC
 - Повторные попытки при ошибках отправки
-- Prometheus метрики
+- Prometheus метрики с визуализацией в Grafana
 - JSON логирование
 - CLI интерфейс
+- Контейнеризация с Docker и Docker Compose
 
 ## Установка
 
+### С использованием Poetry
+
 ```bash
-pip install -r requirements.txt
+# Установка зависимостей
+poetry install
+
+# Проверка типов
+poetry run pyright
+
+# Запуск линтера
+poetry run ruff check .
 ```
+
+### С использованием Docker
+
+```bash
+# Сборка и запуск всех сервисов
+docker compose up -d
+
+# Просмотр логов
+docker compose logs -f
+
+# Остановка сервисов
+docker compose down
+
+# Остановка сервисов с удалением волюмов
+docker compose down -v
+```
+
+После запуска будут доступны:
+- RabbitMQ Management UI: http://localhost:15672 (guest/guest)
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (admin/admin)
+- Метрики приложения: http://localhost:8000/metrics
 
 ## Использование
 
@@ -24,11 +56,17 @@ pip install -r requirements.txt
 Сервис можно запустить в одном из двух режимов:
 
 ```bash
+# Через Poetry:
+
 # Запуск сервера метрик
-python -m app --metrics
+poetry run python -m app.cli --metrics
 
 # Запуск AMQP консьюмера
-python -m app --consumer
+poetry run python -m app.cli --consumer
+
+# Через Docker:
+docker compose up metrics    # для метрик
+docker compose up consumer  # для консьюмера
 ```
 
 Опции `--metrics` и `--consumer` являются взаимоисключающими - необходимо выбрать один из режимов работы.
@@ -93,6 +131,47 @@ python -m app --consumer
 - Уровень логирования
 
 ## Разработка
+
+### Требования
+
+- Python 3.9+
+- Poetry
+
+### Установка для разработки
+
+```bash
+# Установка Poetry (если еще не установлен)
+curl -sSL https://install.python-poetry.org | python3 -
+
+# Установка зависимостей
+poetry install
+
+# Активация виртуального окружения
+source $(poetry env info --path)/bin/activate
+```
+
+### Запуск сервиса
+
+```bash
+# Через Poetry
+poetry run python -m app --consumer
+
+# Или после активации окружения
+python -m app --consumer
+```
+
+### Инструменты разработчика
+
+- **Ruff**: Линтер и форматтер кода
+  ```bash
+  poetry run ruff check .    # проверка
+  poetry run ruff format .   # форматирование
+  ```
+
+- **Pyright**: Статический анализатор типов
+  ```bash
+  poetry run pyright
+  ```
 
 ### Структура проекта
 

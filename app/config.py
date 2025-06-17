@@ -1,8 +1,11 @@
 """Config module for the application."""
 from dataclasses import dataclass
-from typing import Optional
+from typing import Final, Literal
 
-@dataclass
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+
+@dataclass(frozen=True)
 class Config:
     """Application configuration."""
     # AMQP
@@ -10,17 +13,18 @@ class Config:
     exchange: str = ""  # default exchange
     queue: str = "callbacks"
     routing_key: str = "callbacks"
-    
+
     # HTTP
     default_method: str = "POST"
-    retry_attempts: int = 3
-    retry_delay: int = 1  # seconds
-    
+    retry_attempts: Final[int] = 3
+    retry_delay: Final[int] = 1  # seconds
+
     # Metrics
     metrics_port: int = 8000
     metrics_host: str = "0.0.0.0"
-    
-    # Logger
-    log_level: str = "INFO"
 
-config = Config()
+    # Logger
+    log_level: LogLevel = "INFO"
+
+
+config: Final[Config] = Config()
